@@ -1,8 +1,7 @@
-
 # Brotli-G SDK
 This project contains the specifications and reference implementations for the Brotli-G compression format: 
  
-[Brotli-G Bitstream Spec](docs/Brotli_G_Format_v3.pdf)
+[Brotli-G Bitstream Spec](docs/Brotli_G_Bitstream_Format.pdf)
 
 The use of this technical documentation is goverened by the [License](LICENSE.txt).
 
