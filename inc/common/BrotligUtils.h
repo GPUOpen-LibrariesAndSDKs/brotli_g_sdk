@@ -1,6 +1,6 @@
-// Brotli-G SDK 1.0
+// Brotli-G SDK 1.1
 // 
-// Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -23,7 +23,6 @@
    See file LICENSE for detail or copy at https://opensource.org/licenses/MIT
 */
 
-
 #pragma once
 
 extern "C" {
@@ -35,18 +34,12 @@ extern "C" {
 #include "brotli/c/enc/bit_cost.h"
 }
 
-#include "BrotligCommon.h"
+#include "common/BrotligCommon.h"
+#include "common/BrotligReverseBits.h"
 
 namespace BrotliG
 {
     size_t ComputeFileSize(std::string filename);
-
-    void EncodeWindowBits(int lgwin, bool large_window,
-        uint16_t* last_bytes, uint8_t* last_bytes_bits);
-
-    /* Wraps 64-bit input position to 32-bit ring-buffer position preserving
-       "not-a-first-lap" feature. */
-    uint32_t WrapPosition(uint64_t position);
 
     uint32_t Log2Floor(uint32_t x);
 
@@ -64,58 +57,37 @@ namespace BrotliG
         return n;
     }
 
-    bool ShouldCompress(
-        const uint8_t* data, const size_t mask, const uint64_t last_flush_pos,
-        const size_t bytes, const size_t num_literals, const size_t num_commands);
+    inline uint16_t BrotligReverseBits15(uint16_t bits)
+    {
+        return sBrotligReverseBits15[bits];
+    }
 
-    /* Decide if we want to use a more complex static context map containing 13
-       context values, based on the entropy reduction of histograms over the
-       first 5 bits of literals. */
-    bool ShouldUseComplexStaticContextMap(const uint8_t* input,
-        size_t start_pos, size_t length, size_t mask, int quality, size_t size_hint,
-        size_t* num_literal_contexts, const uint32_t** literal_context_map,
-        uint32_t* arena);
+    inline uint16_t BrotligReverseBits(size_t num_bits, uint16_t bits)
+    {
+        static const size_t kLut[16] = {  /* Pre-reversed 4-bit values. */
+            0x00, 0x08, 0x04, 0x0C, 0x02, 0x0A, 0x06, 0x0E,
+            0x01, 0x09, 0x05, 0x0D, 0x03, 0x0B, 0x07, 0x0F
+        };
 
-    void DecideOverLiteralContextModeling(const uint8_t* input,
-        size_t start_pos, size_t length, size_t mask, int quality, size_t size_hint,
-        size_t* num_literal_contexts, const uint32_t** literal_context_map,
-        uint32_t* arena);
-
-    /* Decide about the context map based on the ability of the prediction
-       ability of the previous byte UTF8-prefix on the next byte. The
-       prediction ability is calculated as Shannon entropy. Here we need
-       Shannon entropy instead of 'BitsEntropy' since the prefix will be
-       encoded with the remaining 6 bits of the following byte, and
-       BitsEntropy will assume that symbol to be stored alone using Huffman
-       coding. */
-    void ChooseContextMap(int quality,
-        uint32_t* bigram_histo,
-        size_t* num_literal_contexts,
-        const uint32_t** literal_context_map);
-
-    void MoveToFront(std::vector<uint8_t>& v, size_t index);
-    std::vector<uint32_t> MoveToFrontTransform(const std::vector<uint32_t>& in);
-
-    /* Finds runs of zeros in v[0..in_size) and replaces them with a prefix code of
-       the run length plus extra bits (lower 9 bits is the prefix code and the rest
-       are the extra bits). Non-zero values in v[] are shifted by
-       *max_length_prefix. Will not create prefix codes bigger than the initial
-       value of *max_run_length_prefix. The prefix code of run length L is simply
-       Log2Floor(L) and the number of extra bits is the same as the prefix code. */
-    void RunLengthCodeZeros(std::vector<uint32_t> v, size_t& out_size, uint32_t& max_run_length_prefix);
-
-    uint16_t BrotligReverse16Bits(uint16_t bits);
-    uint16_t BrotligReverseBits(size_t num_bits, uint16_t bits);
-
-    void EncodeMLen(
-        size_t length,
-        uint64_t& bits,
-        size_t& numbits,
-        uint64_t& nibblebits
-    );
+        size_t retval = kLut[bits & 0x0F];
+        size_t i;
+        for (i = 4; i < num_bits; i += 4) {
+            retval <<= 4;
+            bits = (uint16_t)(bits >> 4);
+            retval |= kLut[bits & 0x0F];
+        }
+        retval >>= ((0 - num_bits) & 0x03);
+        return (uint16_t)retval;
+    }
 
     uint32_t Mask32(uint32_t n);
 
-    std::string ByteToBinaryString(uint8_t byte);
-    std::string ToBinaryString(uint16_t code, size_t codelen);
+    uint32_t GetNumberOfProcessorsThreads();
+
+    inline uint32_t RoundUp(uint32_t n, uint32_t m)
+    {
+        return ((n + m - 1) / m) * m;
+    }
+
+    void ComputeRLECodes(size_t size, uint8_t* data, uint8_t* rle_codes, size_t& num_rle_codes, uint8_t* rle_extra_bits, size_t& num_rle_extra_bits);
 }

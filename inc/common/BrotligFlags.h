@@ -1,6 +1,6 @@
-// Brotli-G SDK 1.0
+// Brotli-G SDK 1.1
 // 
-// Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -21,7 +21,6 @@
 
 namespace BrotliG
 {
-
 // Header flags
 #define PAD_HEADER 0
 #define LGWIN_FIELD 0
@@ -35,23 +34,17 @@ namespace BrotliG
 #define PREAMBLE 0
 #define BS_SIZES_STORE 1
 
-// command generation flags
-#define LZ77_PAD_INPUT  0
-#define USE_INSERT_ONLY_COMMANDS 1
+// Command generation flags
+#define USE_INSERT_ONLY_COMMANDS 1                                  // 0 - off, 1 - on  - to remove
 
-// command distribution flags
-#define ADD_SENTINEL_PER_BITSTREAM 0
+// Stream serialization flags
+#define USE_COMPACT_SERIALIZTION 1                                  // 0 - off, 1 - on  - to remove
+#define REDISTRIBUTE_LITERALS 1                                     // 0 - off, 1 - on  - to remove
 
-// stream serialization flags
-#define USE_COMPACT_SERIALIZTION 1
-#define REDISTRIBUTE_LITERALS 1
+// Display flags: default off
+#define SHOW_PROGRESS 0                                             // 0 - off, 1 - on
 
-// display flags: default off
-#define SHOW_PROGRESS 0
-
-// multithread flags
-#define BROTLIG_ENCODER_MULTITHREADED 1
-#define BROTLIG_ENCODER_MULITHREADED_VERSION 0
-#define BROTLIG_CPU_DECODER_MULTITHREADED 1
-#define BROTLIG_CPU_DECODER_MULITHREADED_VERSION 0
+// Multithread flags
+#define BROTLIG_ENCODER_MULTITHREADING_MODE 1                       // 0 - single threaded, 1 - multi-threader
+#define BROTLIG_CPU_DECODER_MULTITHREADING_MODE 1                   // 0 - single threaded, 1 - multi-threader
 }

@@ -1,6 +1,6 @@
-# Brotli-G SDK 1.0 Sample
+# Brotli-G SDK 1.1 Sample
 # 
-# Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files(the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
@@ -42,13 +42,12 @@ target_sources(brotlig_cli
 target_include_directories(brotlig_cli PUBLIC
     ./
     ${PROJECT_SOURCE_DIR}/external/brotli/c/include
-    ${PROJECT_SOURCE_DIR}/external
     ${PROJECT_SOURCE_DIR}/inc
     ${PROJECT_SOURCE_DIR}/inc/common
     ${PROJECT_SOURCE_DIR}/inc/decoder
     ${PROJECT_SOURCE_DIR}/inc/encoder
 	${PROJECT_SOURCE_DIR}/sample/external/dxc_2021_12_08/inc
-	${PROJECT_SOURCE_DIR}/sample/external/d3dx12
+	${PROJECT_SOURCE_DIR}/sample/external/DirectX-Headers/include/directx
 )
 
 target_link_directories( brotlig_cli PRIVATE 
