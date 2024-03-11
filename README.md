@@ -27,10 +27,10 @@ Run "Build.bat" from a Visual Studio Developer Command Prompt to generate build 
 To use in a visual studio project, include `inc` `external` and `external\brotli\c\include` as include directories and link `build\external\brotli\Release\brotli.lib` and `build\Release\brotlig.lib` as external libraries.
  
 Relevant header files:
-* `inc/BrotligEncoder.h` - function declarations for BrotliG compressor 
-* `inc/BrotligDecoder.h` - function declarations for BrotliG CPU decompressor
-* `inc/BrotliG.h`        - BroltiG API header file for both compressor and CPU decompressor
-* `inc/DataStream.h`     - data structures for BrotliG datastream
+* `inc/BrotligEncoder.h` - function declarations for Brotli-G compressor 
+* `inc/BrotligDecoder.h` - function declarations for Brotli-G CPU decompressor
+* `inc/BrotliG.h`        - Brolti-G API header file for both compressor and CPU decompressor
+* `inc/DataStream.h`     - data structures for Brotli-G datastream
 
 Code examples:
 
@@ -87,7 +87,7 @@ rootParameters[RootUAVOutput].InitAsUnorderedAccessView(1);	// Decompressed data
 ```
 ## Sample
 
-Source code of a sample demostrating the usage of BrotliG APIs is provided in the `sample` directory.`Build.bat` builds the sample by default. 
+Source code of a sample demostrating the usage of Brotli-G APIs is provided in the `sample` directory.`Build.bat` builds the sample by default. 
 
 Sample build output `bin\Release\brotlig.exe`. 
 
