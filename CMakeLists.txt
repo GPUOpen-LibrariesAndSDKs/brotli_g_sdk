@@ -1,6 +1,6 @@
-# Brotli-G SDK 1.0
+# Brotli-G SDK 1.1
 # 
-# Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+# Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files(the "Software"), to deal
 # in the Software without restriction, including without limitation the rights
@@ -31,13 +31,16 @@
 
  option(OPTION_BUILD_SAMPLE  "Build BrotliG sample application" OFF)
  option(OPTION_SAMPLE_INCLUDE_BROTLI  "Include Brotli in sample application" OFF)
- option(OPTION_SAMPLE_ENABLE_GPU  "Enable GPU decompression in sample application" OFF) 
+ option(OPTION_SAMPLE_ENABLE_GPU  "Enable GPU decompression in sample application" OFF)
+ option(OPTION_SAMPLE_ENABLE_AGS  "Enable AGS in GPU decompression sample" OFF)
+ option(OPTION_BUILD_TEST	"Build BrotliG test application" OFF)
 
  # generate the output binary in the /bin directory
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
+ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
 
- # Brotli Lib
- add_subdirectory( "external/brotli" )
+ # Configure externals
+ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
+ include(external/cmake/CMakeLists.txt)
  include_directories("external/brotli/c/include")
  include_directories("external")
  list(APPEND DEPS brotli)
@@ -85,7 +88,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/bin)
  
  list(APPEND DEPS brotlig)
  
-  # Brotli-G Sample Apllication
+  # Brotli-G Sample Application
   if (OPTION_BUILD_SAMPLE) 
 	add_subdirectory(sample)
   endif()

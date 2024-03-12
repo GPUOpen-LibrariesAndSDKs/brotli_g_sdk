@@ -1,6 +1,6 @@
-// Brotli-G SDK 1.0
+// Brotli-G SDK 1.1
 // 
-// Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -25,58 +25,15 @@
 
 namespace BrotliG
 {
-    typedef uint8_t Byte;
-
-    typedef struct BrotligByteBuffer
-    {
-        Byte* data;
-        size_t size;
-
-        BrotligByteBuffer()
-        {
-            data = nullptr;
-            size = 0;
-        }
-
-        BrotligByteBuffer(const size_t bufSize)
-        {
-            size = bufSize;
-            data = new Byte[bufSize];
-        }
-
-        BrotligByteBuffer(const BrotligByteBuffer& b)
-        {
-            data = new Byte[b.size];
-            memcpy(data, b.data, b.size);
-            size = b.size;
-        }
-
-        void operator=(const BrotligByteBuffer& b)
-        {
-            if (data != nullptr)
-                delete[] data;
-            data = new Byte[b.size];
-            memcpy(data, b.data, b.size);
-            size = b.size;
-        }
-
-        ~BrotligByteBuffer()
-        {
-            if (data != nullptr)
-                delete[] data;
-            data = nullptr;
-            size = 0;
-        }
-    } BrotligByteBuffer;
-
     struct StreamHeader
     {
-        uint8_t Id;
-        uint8_t Magic;
+        uint8_t  Id;
+        uint8_t  Magic;
         uint16_t NumPages;
-        uint32_t PageSizeIdx : 2;
-        uint32_t LastPageSize : 18;
-        uint32_t Reserved : 12;
+        uint32_t PageSizeIdx            : BROTLIG_STREAM_PAGE_SIZE_IDX_BITS;
+        uint32_t LastPageSize           : BROTLIG_STREAM_LASTPAGE_SIZE_BITS;
+        uint32_t Preconditioned         : BROTLIG_STREAM_PRECONDITION_BITS;
+        uint32_t Reserved               : BROTLIG_STREAM_RESERVED_BITS;
 
         inline void SetId(uint8_t id)
         {
@@ -108,7 +65,7 @@ namespace BrotliG
 
         inline void SetPageSize(size_t size)
         {
-            PageSizeIdx = CountBits(size / BROTLIG_MIN_PAGE_SIZE);
+            PageSizeIdx = CountBits(size / (BROTLIG_MIN_PAGE_SIZE));
 
             assert(PageSize() == size && "Incorrect page size!");
         }
@@ -116,6 +73,37 @@ namespace BrotliG
         inline size_t PageSize() const
         {
             return static_cast<size_t>(BROTLIG_MIN_PAGE_SIZE) << PageSizeIdx;
+        }
+
+        inline void SetPreconditioned(bool flag)
+        {
+            Preconditioned = static_cast<uint32_t>(flag);
+        }
+
+        inline bool IsPreconditioned() const
+        {
+            return (Preconditioned == 1);
+        }
+    };
+
+    struct PreconditionHeader
+    {        
+        uint32_t Swizzled               : BROTLIG_PRECON_SWIZZLING_BITS;
+        uint32_t PitchD3D12Aligned      : BROTLIG_PRECON_PITCH_D3D12_ALIGNED_FLAG_BITS;
+        uint32_t WidthInBlocks          : BROTLIG_PRECON_TEX_WIDTH_BLOCK_BITS;
+        uint32_t HeightInBlocks         : BROTLIG_PRECON_TEX_HEIGHT_BLOCK_BITS;
+        uint32_t Format                 : BROTLIG_PRECON_DATA_FORMAT;
+        uint32_t NumMips                : BROTLIG_PRECON_TEX_NUMMIPLEVELS_BITS;
+        uint32_t PitchInBytes           : BROTLIG_PRECON_TEX_PITCH_BYTES_BITS;
+
+        inline void SetDataFormat(BROTLIG_DATA_FORMAT format)
+        {
+            Format = static_cast<uint32_t>(format);
+        }
+
+        inline BROTLIG_DATA_FORMAT DataFormat() const
+        {
+            return static_cast<BROTLIG_DATA_FORMAT>(Format);
         }
     };
 }

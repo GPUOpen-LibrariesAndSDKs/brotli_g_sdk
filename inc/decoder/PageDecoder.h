@@ -1,6 +1,6 @@
-// Brotli-G SDK 1.0
+// Brotli-G SDK 1.1
 // 
-// Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -16,210 +16,94 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 #pragma once
 
+extern "C" {
+#include "brotli/c/dec/huffman.h"
+}
+
+#include "common/BrotligCommand.h"
 #include "common/BrotligDeswizzler.h"
 #include "common/BrotligCommandLut.h"
-#include "common/BrotligMultithreading.h"
+#include "common/BrotligDataConditioner.h"
 
 #include "DataStream.h"
-#include "BrotligDecoderState.h"
 
 namespace BrotliG
 {
-    class BrotligCommandDecoder
+    typedef struct BrotligDecoderParams
+    {
+        int lgwin;
+        uint32_t distance_postfix_bits;
+        uint32_t num_direct_distance_codes;
+
+        size_t page_size;
+        size_t num_bitstreams;
+
+        BrotligDecoderParams()
+        {
+            lgwin = BROTLI_DEFAULT_WINDOW;
+            distance_postfix_bits = 0;
+            num_direct_distance_codes = 0;
+
+            page_size = BROTLIG_DEFAULT_PAGE_SIZE;
+            num_bitstreams = BROLTIG_DEFAULT_NUM_BITSTREAMS;
+        }
+
+        BrotligDecoderParams(
+            size_t p_size,
+            size_t n_bitstreams
+        )
+        {
+            lgwin = BROTLI_DEFAULT_WINDOW;
+            distance_postfix_bits = 0;
+            num_direct_distance_codes = 0;
+
+            page_size = p_size;
+            num_bitstreams = n_bitstreams;
+        }
+
+        BrotligDecoderParams& operator=(const BrotligDecoderParams& other)
+        {
+            this->lgwin = other.lgwin;
+            this->distance_postfix_bits = other.distance_postfix_bits;
+            this->num_direct_distance_codes = other.num_direct_distance_codes;
+            this->page_size = other.page_size;
+            this->num_bitstreams = other.num_bitstreams;
+
+            return *this;
+        }
+    }BrotligDecoderParams;
+
+    class PageDecoder
     {
     public:
-        BrotligCommandDecoder(BrotligDecoderState* decoderState, BrotligDeswizzler* deswizzler)
-        {
-            m_decoderState = decoderState;
-            m_deswizzler = deswizzler;
-        }
-
-        ~BrotligCommandDecoder()
-        {
-            m_decoderState = nullptr;
-            m_deswizzler = nullptr;
-        }
-
-        BrotligCommand DecodeLengths()
-        {
-            BrotligCommand cmd;
-            size_t codelen = 0;
-            cmd.cmd_prefix = DecodeICP(m_deswizzler->ReadNoConsume(16), codelen);
-            m_deswizzler->Consume(static_cast<uint32_t>(codelen));
-            if (cmd.cmd_prefix <= BROTLI_NUM_COMMAND_SYMBOLS)
-            {
-                BrotligCmdLutElement clut = sBrotligCmdLut[cmd.cmd_prefix];
-                cmd.insert_len = clut.insert_len_offset;
-                if (clut.insert_len_extra_bits != 0)
-                    cmd.insert_len += m_deswizzler->ReadAndConsume(clut.insert_len_extra_bits);
-                cmd.copy_len = m_deswizzler->ReadAndConsume(clut.copy_len_extra_bits);
-                cmd.copy_len += clut.copy_len_offset;
-                cmd.dist_code = clut.distance_code;
-            }
-            else
-            {
-                uint16_t insert_code = cmd.cmd_prefix - BROTLI_NUM_COMMAND_SYMBOLS;
-                uint32_t insnumextra = GetInsertExtra(insert_code);
-                uint32_t insert_base = GetInsertBase(insert_code);
-                uint32_t insert_extra_val = m_deswizzler->ReadAndConsume(insnumextra);
-                cmd.insert_len = insert_base + insert_extra_val;
-                cmd.copy_len = 0;
-                cmd.dist_code = 0;
-            }
-
-            return cmd;
-        }
-
-        uint8_t DecodeLiteral()
-        {
-            uint16_t lsymbol = 0;
-            size_t codelen = 0;
-            lsymbol = DecodeLit(m_deswizzler->ReadNoConsume(16), codelen);
-            m_deswizzler->Consume(static_cast<uint32_t>(codelen));
-
-            return (uint8_t)lsymbol;
-        }
-
-        uint8_t DecodeNFetchLiteral(uint16_t& code, size_t& codelen)
-        {
-            uint16_t lsymbol = 0;
-            code = static_cast<uint16_t>(m_deswizzler->ReadNoConsume(16));
-            lsymbol = DecodeLit(code, codelen);
-            m_deswizzler->Consume(static_cast<uint32_t>(codelen));
-
-            return (uint8_t)lsymbol;
-        }
-
-        uint32_t DecodeDistance()
-        {
-            uint16_t dsymbol = 0;
-            size_t codelen = 0;
-            dsymbol = DecodeDist(m_deswizzler->ReadNoConsume(16), codelen);
-            m_deswizzler->Consume(static_cast<uint32_t>(codelen));
-
-            return dsymbol;
-        }
-
-        void TranslateDistance(BrotligCommand& cmd)
-        {
-            uint32_t dist = 0;
-            uint32_t ndistbits = 0;
-            uint32_t dist_code = static_cast<uint32_t>(cmd.dist_code);
-            switch (dist_code)
-            {
-            case  0: dist = m_decoderState->distring[0];		break;
-            case  1: dist = m_decoderState->distring[1];		break;
-            case  2: dist = m_decoderState->distring[2];		break;
-            case  3: dist = m_decoderState->distring[3];		break;
-            case  4: dist = m_decoderState->distring[0] - 1;	break;
-            case  5: dist = m_decoderState->distring[0] + 1;	break;
-            case  6: dist = m_decoderState->distring[0] - 2;	break;
-            case  7: dist = m_decoderState->distring[0] + 2;	break;
-            case  8: dist = m_decoderState->distring[0] - 3;	break;
-            case  9: dist = m_decoderState->distring[0] + 3;	break;
-            case 10: dist = m_decoderState->distring[1] - 1;	break;
-            case 11: dist = m_decoderState->distring[1] + 1;    break;
-            case 12: dist = m_decoderState->distring[1] - 2;    break;
-            case 13: dist = m_decoderState->distring[1] + 2;    break;
-            case 14: dist = m_decoderState->distring[1] - 3;    break;
-            case 15: dist = m_decoderState->distring[1] + 3;    break;
-            default:
-            {
-                if (m_decoderState->params->num_direct_distance_codes > 0
-                    && dist_code < 16 + m_decoderState->params->num_direct_distance_codes)
-                {
-                    dist = dist_code - 15;
-                }
-                else
-                {
-                    ndistbits = 1 +
-                        ((dist_code - m_decoderState->params->num_direct_distance_codes - 16)
-                            >> (m_decoderState->params->distance_postfix_bits + 1));
-
-                    cmd.dist_extra = m_deswizzler->ReadAndConsume(ndistbits);
-
-                    uint32_t hcode = (dist_code - m_decoderState->params->num_direct_distance_codes - 16)
-                        >> m_decoderState->params->distance_postfix_bits;
-
-                    uint32_t lcode = (dist_code - m_decoderState->params->num_direct_distance_codes - 16)
-                        & Mask32(m_decoderState->params->distance_postfix_bits);
-
-                    uint32_t offset = ((2 + (hcode & 1)) << ndistbits) - 4;
-                    dist = ((offset + cmd.dist_extra) << m_decoderState->params->distance_postfix_bits)
-                        + lcode
-                        + m_decoderState->params->num_direct_distance_codes
-                        + 1;
-                }
-            }
-            }
-
-            cmd.dist_prefix = ndistbits << 10;
-            cmd.dist_prefix |= dist_code;
-
-            cmd.dist = dist;
-
-            if (dist_code > 0)
-            {
-                m_decoderState->distring[3] = m_decoderState->distring[2];
-                m_decoderState->distring[2] = m_decoderState->distring[1];
-                m_decoderState->distring[1] = m_decoderState->distring[0];
-                m_decoderState->distring[0] = dist;
-            }
-        }
-
-        void SwitchStream()
-        {
-            m_deswizzler->BSSwitch();
-        }
-
-        void Reset()
-        {
-            m_deswizzler->Reset();
-        }
-
-    private:
-        BrotligDecoderState* m_decoderState;
-        BrotligDeswizzler* m_deswizzler;
-
-        uint16_t DecodeLit(uint16_t bits, size_t& codelen)
-        {
-            return m_decoderState->symbolTrees[2]->Symbol(BrotligReverse16Bits(bits), codelen);
-        }
-
-        uint16_t DecodeICP(uint16_t bits, size_t& codelen)
-        {
-            return m_decoderState->symbolTrees[0]->Symbol(BrotligReverse16Bits(bits), codelen);
-        }
-
-        uint16_t DecodeDist(uint16_t bits, size_t& codelen)
-        {
-            return m_decoderState->symbolTrees[1]->Symbol(BrotligReverse16Bits(bits), codelen);
-        }
-    };
-
-    class PageDecoder : public BrotligWorker
-    {
-    public:
-
         PageDecoder();
         ~PageDecoder();
 
-        bool Setup(const uint8_t* input, size_t input_size, void* params, uint32_t flags, uint32_t extra);
-        bool Run();
+        bool Setup(const BrotligDecoderParams& params, const BrotligDataconditionParams& dcParams);
+        bool Run(const uint8_t* input, size_t inputSize, size_t inputOffset, uint8_t* output, size_t outputSize, size_t outputOffset);
         void Cleanup();
 
     private:
-        BrotligDecoderState* m_state;
+        inline bool DecodeCommand(BrotligCommand& cmd);
+        inline uint8_t DecodeLiteral();
+        uint8_t DecodeNFetchLiteral(uint16_t& code, size_t& codelen);
+        inline uint32_t DecodeDistance();
+        inline void TranslateDistance(BrotligCommand& cmd);
 
-        void ReadMetaBlockHeader();
-        bool WriteUncompressedMetaBlock();
-        bool DecodeCompressedMetaBlock();
-        void LoadSymbolTables(BrotligDeswizzler* deswizzler);
-        void DecodeCommands(BrotligDeswizzler* deswizzler);
-        void DecodeCommandsWithLitDist(BrotligDeswizzler* deswizzler);
-        void DecodeCommandsNoLitDist(BrotligDeswizzler* deswizzler);
+        inline uint32_t DeconditionBC1_5(uint32_t offsetAddr, uint32_t sub);
+        void DeltaDecode(size_t page_start, size_t page_end, uint8_t* input);
+        void DeltaDecodeByte(size_t inSize, uint8_t* inData);
+
+        BrotligDecoderParams m_params;
+        BrotligDataconditionParams m_dcparams;
+
+        uint16_t* m_symbols[BROTLIG_NUM_HUFFMAN_TREES];
+        uint16_t* m_codelens[BROTLIG_NUM_HUFFMAN_TREES];
+
+        uint32_t m_distring[4];
+
+        BrotligDeswizzler m_pReader;
     };
 }

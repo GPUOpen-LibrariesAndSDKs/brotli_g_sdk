@@ -1,7 +1,5 @@
 # Brotli-G SDK
 This project contains the specifications and reference implementations for the Brotli-G compression format: 
-
-Note: V1.1 release coming soon
  
 [Brotli-G Bitstream Spec](docs/Brotli_G_Bitstream_Format.pdf)
 
@@ -10,10 +8,10 @@ The use of this technical documentation is goverened by the [License](LICENSE.tx
 # Source
 
 * `src/decoder/BrotliGCompute.hlsl` - start here to read the HLSL source of the GPU decompressor
-* `src/decoder/PageDecoder.cpp` - start here to read the source of the CPU decompressor
-* `src/BrotligDecoder.cpp` - this contains the code driving the CPU decompressor
-* `src/encoder/PageEncoder.cpp` - start here to read the source of the compressor
-* `src/BrotligEncoder.cpp` - entry point for the compressor
+* `src/decoder/PageDecoder.cpp`     - start here to read the source of the CPU decompressor
+* `src/BrotligDecoder.cpp`          - this contains the code driving the CPU decompressor
+* `src/encoder/PageEncoder.cpp`     - start here to read the source of the compressor
+* `src/BrotligEncoder.cpp`          - entry point for the compressor
 
 
 ## Getting Started
@@ -31,14 +29,14 @@ To use in a visual studio project, include `inc` `external` and `external\brotli
 Relevant header files:
 * `inc/BrotligEncoder.h` - function declarations for Brotli-G compressor 
 * `inc/BrotligDecoder.h` - function declarations for Brotli-G CPU decompressor
-* `inc/BrotliG.h` - Brotli-G API header file for both compressor and CPU decompressor
-* `inc/DataStream.h` - data structures for Brotli-G datastream
+* `inc/BrotliG.h`        - Brolti-G API header file for both compressor and CPU decompressor
+* `inc/DataStream.h`     - data structures for Brotli-G datastream
 
 Code examples:
 
 ```
 // Compression
-void Compress(size_t srcSize, uint8_t* src, size_t& dstSize, uint8_t*& dst)
+void Compress(size_t srcSize, uint8_t* src, size_t& dstSize, uint8_t*& dst, BrotligDataconditionParams dcParams)
 {
     dstSize = BrotliG::MaxCompressedSize(srcSize);
     dst = new uint8_t[dstSize];
@@ -51,6 +49,7 @@ void Compress(size_t srcSize, uint8_t* src, size_t& dstSize, uint8_t*& dst)
 			&actualSize,		// actual compressed size (bytes) 
 			dst, 			// compressed output
 			65536,			// page size (bytes)
+			dcParams,		// data pre-conditioning parameters
 			nullptr			// handle to an application defined progress function
 		);
 	
@@ -82,22 +81,18 @@ Example root signature for BrotliGCompute.hlsl:
 
 ```
 CD3DX12_ROOT_PARAMETER1 rootParameters[RootParametersCount];
-rootParameters[RootSRVInput].InitAsShaderResourceView(0);		// Compressed data buffer (SRV input)
-rootParameters[RootUAVControl].InitAsUnorderedAccessView(0);		// Compressed metadata buffer (UAV input)
-rootParameters[RootUAVOutput].InitAsUnorderedAccessView(1);		// Decompressed data buffer (UAV output)
+rootParameters[RootSRVInput].InitAsShaderResourceView(0);	// Compressed data buffer (SRV input)
+rootParameters[RootUAVControl].InitAsUnorderedAccessView(0);	// Compressed data control buffer (UAV input)
+rootParameters[RootUAVOutput].InitAsUnorderedAccessView(1);	// Decompressed data buffer (UAV output)
 ```
 ## Sample
 
 Source code of a sample demostrating the usage of Brotli-G APIs is provided in the `sample` directory.`Build.bat` builds the sample by default. 
 
-Sample build output `bin\Release\brotlig.exe`.
+Sample build output `bin\Release\brotlig.exe`. 
 
 Using the sample:
-* Brotli-G CPU compression:    `brotlig.exe <filepath>`
-* Brotli-G CPU deccompression: `brotlig.exe <filepath>.brotlig`
-* Brotli-G GPU decompression:  `brotlig.exe -gpu <filepath>.brotlig`
-* Help: 					   `brotlig.exe` 
-
-
-
-
+* BrotliG cpu compression:    `brotlig.exe <filepath>`
+* BrotliG cpu deccompression: `brotlig.exe <filepath>.brotlig`
+* BrotliG gpu decompression:  `brotlig.exe -gpu <filepath>.brotlig`
+* Help:                       `brotlig.exe` 

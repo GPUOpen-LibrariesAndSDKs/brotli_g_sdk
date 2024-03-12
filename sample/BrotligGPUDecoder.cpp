@@ -1,6 +1,6 @@
-// Brotli-G SDK 1.0 Sample
+// Brotli-G SDK 1.1 Sample
 // 
-// Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -25,6 +25,9 @@
 #include <d3dx12.h>
 
 #include "DataStream.h"
+
+const wchar_t* shaderfile = L"BrotliGCompute.hlsl";
+const wchar_t* shaderfileOther = L"../../src/decoder/BrotliGCompute.hlsl";
 
 using Microsoft::WRL::ComPtr;
 
@@ -159,178 +162,142 @@ static void CompileShaderFromFile(
     *compiledShader = result.Detach();
 }
 
-class BrotligGPUDecoder
+void CreateBuffer(
+    ID3D12Device* device,
+    D3D12_HEAP_TYPE heapType,
+    D3D12_HEAP_FLAGS heapFlag,
+    UINT64 bufferSize,
+    D3D12_RESOURCE_FLAGS resFlag,
+    D3D12_RESOURCE_STATES resState,
+    ID3D12Resource** resource,
+    LPCWSTR name)
 {
-    const wchar_t* shaderfile = L"BrotliGCompute.hlsl";
-    const wchar_t* shaderfileOther = L"../../src/decoder/BrotliGCompute.hlsl";
+    ComPtr<ID3D12Resource> newResource;
+    *resource = nullptr;
 
-public:
-    ~BrotligGPUDecoder()
+    D3D12_HEAP_PROPERTIES heapProp = CD3DX12_HEAP_PROPERTIES(heapType);
+    D3D12_RESOURCE_DESC resDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, resFlag);
+    ThrowIfFailed(device->CreateCommittedResource(
+        &heapProp,
+        heapFlag,
+        &resDesc,
+        resState,
+        nullptr,
+        IID_PPV_ARGS(&newResource)
+    ));
+    SetName(newResource.Get(), name);
+
+    *resource = newResource.Detach();
+}
+
+void BarrierCopy(
+    ID3D12GraphicsCommandList* commandList,
+    ID3D12Resource* src,
+    UINT64 srcOffset,
+    D3D12_RESOURCE_STATES srcBeforeState,
+    D3D12_RESOURCE_STATES srcCopyState,
+    D3D12_RESOURCE_STATES srcAfterState,
+    ID3D12Resource* dest,
+    UINT64 destOffset,
+    D3D12_RESOURCE_STATES destBeforeState,
+    D3D12_RESOURCE_STATES destCopyState,
+    D3D12_RESOURCE_STATES destAfterState,
+    UINT64 numBytes)
+{
+    std::vector<D3D12_RESOURCE_BARRIER> barriers;
+
+    if (srcBeforeState != srcCopyState)
     {
-        if (m_fenceEvent)
-            CloseHandle(m_fenceEvent);
+        barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+            src,
+            srcBeforeState,
+            srcCopyState
+        ));
     }
 
-    void Setup(bool useWarpDevice)
+    if (destBeforeState != destCopyState)
     {
-        InitializeDevice(useWarpDevice);
-        CreateCommandList();
-        SetupPipelineState();
-        InitializeBuffers();
-        InitializeQueries();
+        barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+            dest,
+            destBeforeState,
+            destCopyState
+        ));
     }
 
-    void Run(
-        uint32_t input_size,
-        const uint8_t* input,
-        uint32_t* output_size,
-        uint8_t* output,
-        double& time)
+    if (barriers.size() > 0)
     {
-        // Get the upload ptr
-        uint8_t* uploadPtr = nullptr;
-        m_uploadBuffer->Map(0, nullptr, (void**)&uploadPtr);
-
-        // Prepare and upload the metadata
-        {
-            uint32_t* pMetadata = reinterpret_cast<uint32_t*>(uploadPtr + BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE);
-            *pMetadata++ = 1;
-            *pMetadata++ = 0;
-            *pMetadata++ = 0;
-            *pMetadata++ = 0;
-
-            BarrierCopy(
-                m_commandList.Get(),
-                m_uploadBuffer.Get(),
-                BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                m_metaBuffer.Get(),
-                0,
-                D3D12_RESOURCE_STATE_COMMON,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_COMMON,
-                sizeof(uint32_t) * 4
-            );
-        }
-
-        // Upload the compressed input
-        {
-            memcpy(uploadPtr, input, input_size);
-
-            BarrierCopy(
-                m_commandList.Get(),
-                m_uploadBuffer.Get(),
-                0,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                D3D12_RESOURCE_STATE_GENERIC_READ,
-                m_inputBuffer.Get(),
-                0,
-                D3D12_RESOURCE_STATE_COMMON,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_COMMON,
-                input_size
-            );
-        }
-
-        // Prepare the output buffer for decompression
-        {
-            D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-                m_outputBuffer.Get(),
-                D3D12_RESOURCE_STATE_COMMON,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS
-            );
-
-            m_commandList->ResourceBarrier(1, &barrier);
-        }
-
-        // Decompress
-        {
-            m_commandList->SetPipelineState(m_pipelineStateObject.Get());
-            m_commandList->SetComputeRootSignature(m_rootSignature.Get());
-
-            m_commandList->SetComputeRootShaderResourceView(RootSRVInput, m_inputBuffer->GetGPUVirtualAddress());
-            m_commandList->SetComputeRootUnorderedAccessView(RootUAVMeta, m_metaBuffer->GetGPUVirtualAddress());
-            m_commandList->SetComputeRootUnorderedAccessView(RootUAVOutput, m_outputBuffer->GetGPUVirtualAddress());
-
-            m_commandList->EndQuery(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
-            m_commandList->Dispatch(BROTLIG_GPUD_DEFAULT_NUM_GROUPS, 1, 1);
-            m_commandList->EndQuery(m_queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
-
-            // Resolve the query data
-            m_commandList->ResolveQueryData(
-                m_queryHeap.Get(),
-                D3D12_QUERY_TYPE_TIMESTAMP,
-                0,
-                2,
-                m_queryReadbackBuffer.Get(),
-                0
-            );
-        }
-
-        // Read back output
-        {
-            BarrierCopy(
-                m_commandList.Get(),
-                m_outputBuffer.Get(),
-                0,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_COPY_SOURCE,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                m_readbackBuffer.Get(),
-                0,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                D3D12_RESOURCE_STATE_COPY_DEST,
-                *output_size
-            );
-        }
-
-        // Kick off execution
-        {
-            ThrowIfFailed(m_commandList->Close());
-            ID3D12CommandList* pCommandLists[] = { m_commandList.Get() };
-            m_commandQueue->ExecuteCommandLists(1, pCommandLists);
-
-            m_fenceValue++;
-            ThrowIfFailed(m_commandQueue->Signal(m_fence.Get(), m_fenceValue));
-            ThrowIfFailed(m_fence->SetEventOnCompletion(m_fenceValue, m_fenceEvent));
-            WaitForSingleObject(m_fenceEvent, INFINITE);
-
-            ThrowIfFailed(m_commandAllocator->Reset());
-            ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), m_pipelineStateObject.Get()));
-        }
-
-        // Copy the output
-        {
-            uint8_t* pData = nullptr;
-            m_readbackBuffer->Map(0, nullptr, (void**)&pData);
-
-            memcpy(output, pData, *output_size);
-
-            m_readbackBuffer->Unmap(0, nullptr);
-        }
-
-        // Compute decompression time
-        {
-            uint64_t* timestampPtr = nullptr;
-            m_queryReadbackBuffer->Map(0, nullptr, (void**)&timestampPtr);
-
-            uint64_t frequency;
-            m_commandQueue->GetTimestampFrequency(&frequency);
-            time += (1e6 / (double)frequency * (double)(timestampPtr[1] - timestampPtr[0]));
-
-            m_queryReadbackBuffer->Unmap(0, nullptr);
-        }
-
-        m_uploadBuffer->Unmap(0, nullptr);
+        commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+        barriers.clear();
     }
 
-private:
+    commandList->CopyBufferRegion(dest, destOffset, src, srcOffset, numBytes);
 
-    void InitializeDevice(bool useWarpDevice)
+    if (srcCopyState != srcAfterState)
+    {
+        barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+            src,
+            srcCopyState,
+            srcAfterState
+        ));
+    }
+
+    if (destCopyState != destAfterState)
+    {
+        barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
+            dest,
+            destCopyState,
+            destAfterState
+        ));
+    }
+
+    if (barriers.size() > 0)
+    {
+        commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
+        barriers.clear();
+    }
+}
+
+BROTLIG_ERROR DecodeGPU(
+    bool useWarpDevice,
+    uint32_t input_size, 
+    const uint8_t* input, 
+    uint32_t* output_size, 
+    uint8_t* output, 
+    double& time)
+{
+    const BrotliG::StreamHeader* sHeader = reinterpret_cast<const BrotliG::StreamHeader*>(input);
+    bool isPreconditioned = sHeader->IsPreconditioned();
+
+    ComPtr<ID3D12Device> device;
+    ComPtr<ID3D12CommandAllocator> commandAllocator;
+    ComPtr<ID3D12CommandQueue> commandQueue;
+    ComPtr<ID3D12GraphicsCommandList> commandList;
+
+    ComPtr<ID3D12Fence> fence;
+    HANDLE fenceEvent = nullptr;
+    uint64_t fenceValue = 0;
+
+    ComPtr<ID3D12RootSignature> rootSignature;
+    ComPtr<ID3D12PipelineState> pipelineStateObject;
+
+    ComPtr<ID3D12QueryHeap> queryHeap;
+    ComPtr<ID3D12Resource> queryReadbackBuffer;
+
+    ComPtr<ID3D12Resource> uploadBuffer;
+    ComPtr<ID3D12Resource> inputBuffer;
+    ComPtr<ID3D12Resource> outputBuffer;
+    ComPtr<ID3D12Resource> metaBuffer;
+    ComPtr<ID3D12Resource> readbackBuffer;
+
+    enum RootParameters : uint32_t
+    {
+        RootSRVInput = 0,
+        RootUAVMeta,
+        RootUAVOutput,
+        RootParametersCount
+    };
+
+    /**Create Device**/
     {
         UINT dxgiFactoryFlags = 0;
 
@@ -341,7 +308,7 @@ private:
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
         {
             debugController->EnableDebugLayer();
-                dxgiFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
+            dxgiFactoryFlags |= DXGI_CREATE_FACTORY_DEBUG;
         }
 #endif
 
@@ -357,9 +324,9 @@ private:
             ThrowIfFailed(D3D12CreateDevice(
                 warpAdapter.Get(),
                 D3D_FEATURE_LEVEL_12_0,
-                IID_PPV_ARGS(&m_device)
+                IID_PPV_ARGS(&device)
             ));
-            SetName(m_device.Get(), L"device");
+            SetName(device.Get(), L"device");
 
             DXGI_ADAPTER_DESC desc;
             warpAdapter->GetDesc(&desc);
@@ -393,8 +360,8 @@ private:
                     }
 
                     if (SUCCEEDED(D3D12CreateDevice(
-                        hardwareAdapter.Get(), 
-                        static_cast<D3D_FEATURE_LEVEL>(BROTLIG_GPUD_MIN_D3D_FEATURE_LEVEL), 
+                        hardwareAdapter.Get(),
+                        static_cast<D3D_FEATURE_LEVEL>(BROTLIG_GPUD_MIN_D3D_FEATURE_LEVEL),
                         _uuidof(ID3D12Device), nullptr)))
                     {
                         wprintf(L"Using: %s\n", desc.Description);
@@ -406,13 +373,13 @@ private:
             ThrowIfFailed(D3D12CreateDevice(
                 hardwareAdapter.Get(),
                 static_cast<D3D_FEATURE_LEVEL>(BROTLIG_GPUD_MIN_D3D_FEATURE_LEVEL),
-                IID_PPV_ARGS(&m_device)
+                IID_PPV_ARGS(&device)
             ));
-            SetName(m_device.Get(), L"device");
+            SetName(device.Get(), L"device");
         }
 
         D3D12_FEATURE_DATA_SHADER_MODEL model{ static_cast<D3D_SHADER_MODEL>(BROTLIG_GPUD_MAX_D3D_SHADER_MODEL) };
-        ThrowIfFailed(m_device->CheckFeatureSupport(
+        ThrowIfFailed(device->CheckFeatureSupport(
             D3D12_FEATURE_SHADER_MODEL,
             &model,
             sizeof(model)
@@ -420,61 +387,62 @@ private:
 
         if (model.HighestShaderModel < static_cast<D3D_SHADER_MODEL>(BROTLIG_GPUD_MIN_D3D_SHADER_MODEL))
         {
-            m_device.Reset();
+            device.Reset();
             char error_msg[45];
             sprintf_s(error_msg, "Device does not support shader model >= %s", GetShaderModelString(static_cast<D3D_SHADER_MODEL>(BROTLIG_GPUD_MIN_D3D_SHADER_MODEL)));
             throw std::exception(error_msg);
         }
     }
 
-    void CreateCommandList()
+    /**Create Command List**/
     {
         D3D12_COMMAND_QUEUE_DESC queueDesc = {};
         queueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
         queueDesc.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
         queueDesc.NodeMask = 0;
 
-        ThrowIfFailed(m_device->CreateCommandQueue(
+        ThrowIfFailed(device->CreateCommandQueue(
             &queueDesc,
-            IID_PPV_ARGS(&m_commandQueue)
+            IID_PPV_ARGS(&commandQueue)
         ));
-        SetName(m_commandQueue.Get(), L"commandqueue");
+        SetName(commandQueue.Get(), L"commandqueue");
 
-        ThrowIfFailed(m_device->CreateCommandAllocator(
+        ThrowIfFailed(device->CreateCommandAllocator(
             D3D12_COMMAND_LIST_TYPE_COMPUTE,
-            IID_PPV_ARGS(&m_commandAllocator)
+            IID_PPV_ARGS(&commandAllocator)
         ));
-        SetName(m_commandAllocator.Get(), L"commandallocator");
+        SetName(commandAllocator.Get(), L"commandallocator");
 
-        ThrowIfFailed(m_device->CreateCommandList(
+        ThrowIfFailed(device->CreateCommandList(
             0,
             D3D12_COMMAND_LIST_TYPE_COMPUTE,
-            m_commandAllocator.Get(),
+            commandAllocator.Get(),
             nullptr,
-            IID_PPV_ARGS(&m_commandList)
+            IID_PPV_ARGS(&commandList)
         ));
-        SetName(m_commandList.Get(), L"commandlist");
+        SetName(commandList.Get(), L"commandlist");
 
-        ThrowIfFailed(m_device->CreateFence(
+        ThrowIfFailed(device->CreateFence(
             0,
             D3D12_FENCE_FLAG_SHARED,
-            IID_PPV_ARGS(&m_fence)
+            IID_PPV_ARGS(&fence)
         ));
-        SetName(m_fence.Get(), L"fence");
+        SetName(fence.Get(), L"fence");
 
-        m_fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+        fenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     }
 
-    void SetupPipelineState()
+    /**Setup Pipeline State**/
     {
         // Root signature
         {
+            CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC computeRootSignatureDesc;
+
             CD3DX12_ROOT_PARAMETER1 rootParameters[RootParametersCount];
             rootParameters[RootSRVInput].InitAsShaderResourceView(0);
             rootParameters[RootUAVMeta].InitAsUnorderedAccessView(0);
             rootParameters[RootUAVOutput].InitAsUnorderedAccessView(1);
 
-            CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC computeRootSignatureDesc;
             computeRootSignatureDesc.Init_1_1(
                 _countof(rootParameters),
                 rootParameters,
@@ -498,13 +466,13 @@ private:
                 throw std::exception(error_str);
             }
 
-            ThrowIfFailed(m_device->CreateRootSignature(
+            ThrowIfFailed(device->CreateRootSignature(
                 0,
                 result->GetBufferPointer(),
                 result->GetBufferSize(),
-                IID_PPV_ARGS(&m_rootSignature)
+                IID_PPV_ARGS(&rootSignature)
             ));
-            SetName(m_rootSignature.Get(), L"rootsignature");
+            SetName(rootSignature.Get(), L"rootsignature");
         }
 
         // Shader compilation
@@ -515,7 +483,7 @@ private:
             };
 
             CompileShaderFromFile(
-                m_device.Get(),
+                device.Get(),
                 shaderfile,
                 shaderfileOther,
                 L"CSMain",
@@ -533,251 +501,248 @@ private:
             D3D12_COMPUTE_PIPELINE_STATE_DESC pipelineDesc = {};
             pipelineDesc.CS.pShaderBytecode = compiledShader->GetBufferPointer();
             pipelineDesc.CS.BytecodeLength = compiledShader->GetBufferSize();
-            pipelineDesc.pRootSignature = m_rootSignature.Get();
+            pipelineDesc.pRootSignature = rootSignature.Get();
 
-            ThrowIfFailed(m_device->CreateComputePipelineState(
+            ThrowIfFailed(device->CreateComputePipelineState(
                 &pipelineDesc,
-                IID_PPV_ARGS(&m_pipelineStateObject)
+                IID_PPV_ARGS(&pipelineStateObject)
             ));
-            SetName(m_pipelineStateObject.Get(), L"pipelinestateobject");
+            SetName(pipelineStateObject.Get(), L"pipelinestateobject");
         }
     }
 
-    void InitializeBuffers()
+    // Create Buffers
     {
         size_t metadataSize = 4 * sizeof(uint32_t);
 
         // Upload Buffer
         CreateBuffer(
-            m_device.Get(),
-            D3D12_HEAP_TYPE_UPLOAD, 
+            device.Get(),
+            D3D12_HEAP_TYPE_UPLOAD,
             D3D12_HEAP_FLAG_NONE,
             BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE + metadataSize,
             D3D12_RESOURCE_FLAG_NONE,
             D3D12_RESOURCE_STATE_GENERIC_READ,
-            &m_uploadBuffer,
+            &uploadBuffer,
             L"uploadbuffer"
         );
 
         // Input Buffer
         CreateBuffer(
-            m_device.Get(),
+            device.Get(),
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_HEAP_FLAG_NONE,
             BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON,
-            &m_inputBuffer,
+            &inputBuffer,
             L"inputbuffer"
         );
 
         // Metadata Buffer
         CreateBuffer(
-            m_device.Get(),
+            device.Get(),
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_HEAP_FLAG_NONE,
             metadataSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON,
-            &m_metaBuffer,
+            &metaBuffer,
             L"metadatabuffer"
         );
 
         // Output Buffer
         CreateBuffer(
-            m_device.Get(),
+            device.Get(),
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_HEAP_FLAG_NONE,
             BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON,
-            &m_outputBuffer,
+            &outputBuffer,
             L"outputbuffer"
         );
 
         // Readback Buffer
         CreateBuffer(
-            m_device.Get(),
+            device.Get(),
             D3D12_HEAP_TYPE_READBACK,
             D3D12_HEAP_FLAG_NONE,
             BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
             D3D12_RESOURCE_FLAG_NONE,
             D3D12_RESOURCE_STATE_COPY_DEST,
-            &m_readbackBuffer,
+            &readbackBuffer,
             L"readbackbuffer"
         );
     }
 
-    void InitializeQueries()
+    // Initialize Queries
     {
         D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
         queryHeapDesc.Count = BROTLIG_GPUD_DEFAULT_MAX_QUERIES;
         queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
         queryHeapDesc.NodeMask = 0;
 
-        ThrowIfFailed(m_device->CreateQueryHeap(
+        ThrowIfFailed(device->CreateQueryHeap(
             &queryHeapDesc,
-            IID_PPV_ARGS(&m_queryHeap)
+            IID_PPV_ARGS(&queryHeap)
         ));
-        SetName(m_queryHeap.Get(), L"queryheap");
+        SetName(queryHeap.Get(), L"queryheap");
 
         CreateBuffer(
-            m_device.Get(),
+            device.Get(),
             D3D12_HEAP_TYPE_READBACK,
             D3D12_HEAP_FLAG_NONE,
-            sizeof(uint64_t) * BROTLIG_GPUD_DEFAULT_MAX_QUERIES,
+            sizeof(uint64_t)* BROTLIG_GPUD_DEFAULT_MAX_QUERIES,
             D3D12_RESOURCE_FLAG_NONE,
             D3D12_RESOURCE_STATE_COPY_DEST,
-            &m_queryReadbackBuffer,
+            &queryReadbackBuffer,
             L"queryreadbackbuffer"
         );
     }
 
-    // Helper functions
-    void CreateBuffer(
-        ID3D12Device* device,
-        D3D12_HEAP_TYPE heapType,
-        D3D12_HEAP_FLAGS heapFlag,
-        UINT64 bufferSize,
-        D3D12_RESOURCE_FLAGS resFlag,
-        D3D12_RESOURCE_STATES resState,
-        ID3D12Resource** resource,
-        LPCWSTR name)
+    // Get the upload ptr
+    uint8_t* uploadPtr = nullptr;
+    uploadBuffer->Map(0, nullptr, (void**)&uploadPtr);
+
+    // Prepare and upload the metadata
     {
-        ComPtr<ID3D12Resource> newResource;
-        *resource = nullptr;
+        uint32_t* pMetadata = reinterpret_cast<uint32_t*>(uploadPtr + BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE);
+        *pMetadata++ = 1;
+        *pMetadata++ = 0;
+        *pMetadata++ = 0;
+        *pMetadata++ = 0;
 
-        D3D12_HEAP_PROPERTIES heapProp = CD3DX12_HEAP_PROPERTIES(heapType);
-        D3D12_RESOURCE_DESC resDesc = CD3DX12_RESOURCE_DESC::Buffer(bufferSize, resFlag);
-        ThrowIfFailed(device->CreateCommittedResource(
-            &heapProp,
-            heapFlag,
-            &resDesc,
-            resState,
-            nullptr,
-            IID_PPV_ARGS(&newResource)
-        ));
-        SetName(newResource.Get(), name);
-
-        *resource = newResource.Detach();
+        BarrierCopy(
+            commandList.Get(),
+            uploadBuffer.Get(),
+            BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            metaBuffer.Get(),
+            0,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+            sizeof(uint32_t) * 4
+        );
     }
 
-    void BarrierCopy(
-        ID3D12GraphicsCommandList* commandList, 
-        ID3D12Resource* src,
-        UINT64 srcOffset,
-        D3D12_RESOURCE_STATES srcBeforeState,
-        D3D12_RESOURCE_STATES srcCopyState,
-        D3D12_RESOURCE_STATES srcAfterState,
-        ID3D12Resource* dest,
-        UINT64 destOffset,
-        D3D12_RESOURCE_STATES destBeforeState,
-        D3D12_RESOURCE_STATES destCopyState,
-        D3D12_RESOURCE_STATES destAfterState,
-        UINT64 numBytes)
+    // Upload the compressed input
     {
-        std::vector<D3D12_RESOURCE_BARRIER> barriers;
+        memcpy(uploadPtr, input, input_size);
 
-        if (srcBeforeState != srcCopyState)
-        {
-            barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-                src,
-                srcBeforeState,
-                srcCopyState
-            ));
-        }
-
-        if (destBeforeState != destCopyState)
-        {
-            barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-                dest,
-                destBeforeState,
-                destCopyState
-            ));
-        }
-        
-        if (barriers.size() > 0)
-        {
-            commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-            barriers.clear();
-        }
-
-        commandList->CopyBufferRegion(dest, destOffset, src, srcOffset, numBytes);
-
-        if (srcCopyState != srcAfterState)
-        {
-            barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-                src,
-                srcCopyState,
-                srcAfterState
-            ));
-        }
-
-        if (destCopyState != destAfterState)
-        {
-            barriers.push_back(CD3DX12_RESOURCE_BARRIER::Transition(
-                dest,
-                destCopyState,
-                destAfterState
-            ));
-        }
-        
-        if (barriers.size() > 0)
-        {
-            commandList->ResourceBarrier(static_cast<UINT>(barriers.size()), barriers.data());
-            barriers.clear();
-        }
+        BarrierCopy(
+            commandList.Get(),
+            uploadBuffer.Get(),
+            0,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            inputBuffer.Get(),
+            0,
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COMMON,
+            input_size
+        );
     }
 
-    ComPtr<IDXGIAdapter1> m_adapter;
-    ComPtr<ID3D12Device> m_device;
-    ComPtr<ID3D12RootSignature> m_rootSignature;
-    ComPtr<ID3D12PipelineState> m_pipelineStateObject;
-    ComPtr<ID3D12Resource> m_uploadBuffer;
-    ComPtr<ID3D12Resource> m_inputBuffer;
-    ComPtr<ID3D12Resource> m_outputBuffer;
-    ComPtr<ID3D12Resource> m_metaBuffer;
-    ComPtr<ID3D12Resource> m_readbackBuffer;
-
-    enum RootParameters : uint32_t
+    // Prepare the hold and the output buffer for decompression
     {
-        RootSRVInput = 0,
-        RootUAVMeta,
-        RootUAVOutput,
-        RootParametersCount
-    };
+        D3D12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+            outputBuffer.Get(),
+            D3D12_RESOURCE_STATE_COMMON,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+        );
 
-    ComPtr<ID3D12CommandAllocator> m_commandAllocator;
-    ComPtr<ID3D12CommandQueue> m_commandQueue;
-    ComPtr<ID3D12GraphicsCommandList> m_commandList;
-    ComPtr<ID3D12Fence> m_fence;
-    HANDLE m_fenceEvent = nullptr;
-    uint64_t m_fenceValue = 0;
+        commandList->ResourceBarrier(1, &barrier);
+    }
 
-    ComPtr<ID3D12QueryHeap> m_queryHeap;
-    ComPtr<ID3D12Resource> m_queryReadbackBuffer;
-};
+    // Decompress
+    {
+        commandList->SetPipelineState(pipelineStateObject.Get());
+        commandList->SetComputeRootSignature(rootSignature.Get());
 
-BROTLIG_ERROR DecodeGPU(
-    bool useWarpDevice, 
-    uint32_t input_size, 
-    const uint8_t* input, 
-    uint32_t* output_size, 
-    uint8_t* output, 
-    double& time)
-{
-    double timeMicro = 0;
-    BrotligGPUDecoder decoder;
-    decoder.Setup(useWarpDevice);
-    decoder.Run(
-        input_size,
-        input,
-        output_size,
-        output,
-        timeMicro
-    );
+        commandList->SetComputeRootShaderResourceView(RootSRVInput, inputBuffer->GetGPUVirtualAddress());
+        commandList->SetComputeRootUnorderedAccessView(RootUAVMeta, metaBuffer->GetGPUVirtualAddress());
+        commandList->SetComputeRootUnorderedAccessView(RootUAVOutput, outputBuffer->GetGPUVirtualAddress());
 
-    time = timeMicro / 1e3;
+        commandList->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 0);
+        commandList->Dispatch(BROTLIG_GPUD_DEFAULT_NUM_GROUPS, 1, 1);
+        commandList->EndQuery(queryHeap.Get(), D3D12_QUERY_TYPE_TIMESTAMP, 1);
+
+        // Resolve the query data
+        commandList->ResolveQueryData(
+            queryHeap.Get(),
+            D3D12_QUERY_TYPE_TIMESTAMP,
+            0,
+            2,
+            queryReadbackBuffer.Get(),
+            0
+        );
+    }
+
+    // Read back output
+    {
+        BarrierCopy(
+            commandList.Get(),
+            outputBuffer.Get(),
+            0,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            readbackBuffer.Get(),
+            0,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            *output_size
+        );
+    }
+
+    // Kick off execution
+    {
+        ThrowIfFailed(commandList->Close());
+        ID3D12CommandList* pCommandLists[] = { commandList.Get() };
+        commandQueue->ExecuteCommandLists(1, pCommandLists);
+
+        fenceValue++;
+        ThrowIfFailed(commandQueue->Signal(fence.Get(), fenceValue));
+        ThrowIfFailed(fence->SetEventOnCompletion(fenceValue, fenceEvent));
+        WaitForSingleObject(fenceEvent, INFINITE);
+
+        ThrowIfFailed(commandAllocator->Reset());
+        ThrowIfFailed(commandList->Reset(commandAllocator.Get(), pipelineStateObject.Get()));
+    }
+
+    // Copy the output
+    {
+        uint8_t* pData = nullptr;
+        readbackBuffer->Map(0, nullptr, (void**)&pData);
+        memcpy(output, pData, *output_size);
+        readbackBuffer->Unmap(0, nullptr);
+    }
+
+    // Compute decompression time
+    {
+        uint64_t* timestampPtr = nullptr;
+        queryReadbackBuffer->Map(0, nullptr, (void**)&timestampPtr);
+
+        uint64_t frequency;
+        commandQueue->GetTimestampFrequency(&frequency);
+        time += (1e6 / (double)frequency * (double)(timestampPtr[1] - timestampPtr[0]));
+
+        queryReadbackBuffer->Unmap(0, nullptr);
+    }
+
+    uploadBuffer->Unmap(0, nullptr);
+
+    if (fenceEvent)
+        CloseHandle(fenceEvent);
+
+    time /= 1e3;
 
     return BROTLIG_OK;
 }

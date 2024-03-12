@@ -16,22 +16,20 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 #pragma once
 
-#include "common/BrotligCommon.h"
-#include "common/BrotligConstants.h"
-#include "common/BrotligFlags.h"
-#include "common/BrotligDataConditioner.h"
+#include <map>
+#include <string>
+#include <queue>
+
+extern "C" {
+#include "brotli/c/dec/huffman.h"
+}
+
+#include "common/BrotligDeswizzler.h"
 
 namespace BrotliG
 {
-#ifdef __cplusplus
-    extern "C"
-    {
-#endif // __cplusplus
-        uint32_t BROTLIG_API DecompressedSize(uint8_t* src);
-        BROTLIG_ERROR BROTLIG_API DecodeCPU(uint32_t input_size, const uint8_t* src, uint32_t* output_size, uint8_t* output, BROTLIG_Feedback_Proc feedbackProc);
-#ifdef __cplusplus
-    };
-#endif // __cplusplus
+    void LoadHuffmanTable(BrotligDeswizzler& reader, size_t alphabet_size, uint16_t symbols[], uint16_t codelens[]);
 }

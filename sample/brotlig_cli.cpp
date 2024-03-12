@@ -1,6 +1,6 @@
-// Brotli-G SDK 1.0 Sample
+// Brotli-G SDK 1.1 Sample
 // 
-// Copyright(c) 2022 Advanced Micro Devices, Inc. All rights reserved.
+// Copyright(c) 2022 - 2024 Advanced Micro Devices, Inc. All rights reserved.
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files(the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
@@ -16,6 +16,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 
 #define NOMINMAX
 #include <Windows.h>
@@ -41,6 +42,7 @@
 #define GIGABYTES   (1024.0 * 1024.0 * 1024.0)
 
 #define BROTLIG_FILE_EXTENSION ".brotlig"
+#define DEFAULT_NUM_REPEAT 1
 
 #ifdef USE_BROTLI_CODEC
 #define BROTLI_FILE_EXTENSION ".brotli"
@@ -50,11 +52,23 @@
 #endif
 
 typedef struct BROTLIG_OPTIONS_T {
+    uint32_t page_size;                             // page size for compressing the source file
+    uint32_t num_repeat;                            // number of times to repeat the task
+    bool use_preconditioning;                       // use format-based preconditioning
+    bool use_swizzling;                             // use block swizzling, BC1-5 textures only
+    bool use_delta_encoding;                        // use delta encoding on color, BC1-5 texture only
+    uint32_t data_format;                           // data format
+    uint32_t tex_width;                             // width of texture (in pixels)
+    uint32_t tex_height;                            // height of texture (in pixels)
+    uint32_t tex_pitch;                             // row pitch of texture (in bytes)
+    uint32_t num_packed_miplevels;                  // number of packed mip map levels
+    bool is_pitch_d3d12_aligned;                    // is the texture pitch aligned with D3D12 specifications
+
 #ifdef USE_GPU_DECOMPRESSION
     bool use_gpu;                                   // use the GPU to decompress the source file
     bool use_warp;                                  // use the warp adapter for GPU decompression
 #endif
-    bool verbose;                                   // print process status on console output, this will slow down performance
+
 #ifdef USE_BROTLI_CODEC
     bool use_brotli;                                // use Brotli code to process the source file, else use BrotliG code
     uint32_t brotli_quality;                        // Brotli compression quality
@@ -62,19 +76,38 @@ typedef struct BROTLIG_OPTIONS_T {
     uint32_t brotli_decode_output_size;             // Brotli decompression output size
 #endif
 
+    bool verbose;                                   // print process status on console output, this will slow down performance
+
     BROTLIG_OPTIONS_T()
     {
+        page_size = BROTLIG_DEFAULT_PAGE_SIZE;
+        num_repeat = 1;
+        use_preconditioning = FALSE;
+        use_swizzling = FALSE;
+        use_delta_encoding = FALSE;
+        data_format = 0;
+        tex_width = 0;
+        tex_height = 0;
+        tex_pitch = 0;
+        num_packed_miplevels = 0;
+        is_pitch_d3d12_aligned = FALSE;
+
 #ifdef USE_GPU_DECOMPRESSION
         use_gpu = FALSE;
         use_warp = FALSE;
+#ifdef USE_AGS
+        use_ags = FALSE;
 #endif
-        verbose = FALSE;
+#endif
+
 #ifdef USE_BROTLI_CODEC
         use_brotli = FALSE;
         brotli_quality = DEFAULT_BROTLI_QUALITY;
         brotli_lgwin = DEFAULT_BROTLI_LGWIN;
         brotli_decode_output_size = DEFAULT_BROTLI_DECODE_OUTPUT_SIZE;
 #endif
+
+        verbose = FALSE;
     }
 } BROTLIG_OPTIONS;
 
@@ -144,21 +177,48 @@ void PrintCommandLineSyntax()
     printf("It processes an input filename into a compressed file with an added extension .brotlig\n");
     printf("To decompress the file use brotlig filename.brotlig.\n");
     printf("By default, filename.brotlig decompresses to filename. For different output, provide outfilename.\n\n");
-    puts(
+    printf(
         "Usage: brotlig [Options] filename [outfilename]\n"
         "Options:\n"
-        " -verbose: Print progress on screen\n"
+        " -pagesize <value>                     : Set encode page byte size (Default is %d, Max is %d, Min is %d)\n"
+        " -precondition                         : Apply format-based preconditioning to input data before compression\n"
+        "\n"
+        " Preconditioning Options: \n"
+        " -swizzle                              : Apply block swizzling (For Preconditioning only)\n"
+        " -delta-encode                         : Apply delta encoding to color (For preconditioning only)\n"
+        " -data-format <value>                  : Input data format (For preconditioning only, Default: 0, See Supported formats below for more options)\n"
+        " -texture-width <value>                : Width of (top level) texture in pixels (For preconditioning only)\n"
+        " -texture-height <value>               : Height of (top level) texture in pixels (For preconditioning only)\n"
+        " -row-pitch <value>                    : Pitch of (top level) texutre in bytes (For preconditioning only)\n"
+        " -num-mip-levels <value>               : Number of mip levels packed in this texture (Min: 1, Max: 16, For preconditioning only)\n"
+        " -texture-pitch-d3d12-aligned          : Texture pitch is aligned to D3D12 specifications (For preconditioning only)\n"
 #ifdef USE_GPU_DECOMPRESSION
-        " -gpu    : Use GPU to decompress srcfile\n"
-        " -warp   : Use warp adapter for GPU decompression\n"
+        "\n"
+        " GPU Decompression Optionn: \n"
+        " -gpu                                  : Use GPU to decompress srcfile\n"
+        " -warp                                 : Use warp adapter for GPU decompression\n"
 #endif
 #ifdef USE_BROTLI_CODEC
-        " -brotli : Use Brotli to compress into a filename.brotli file\n"
-        " -brotli-quality <value> : Set Brotli quality (Min: 0, Max: 11, Default: 11)\n"
-        " -brotli-windowsize <value> : Set Brotli window size (Min: 10, Max: 24, Default: 24)\n"
-        " -brotli-decode-output-size <value> : Set Brotli output buffer byte size\n"
+        "\n"
+        " Brotli Options: \n"
+        " -brotli                               : Use Brotli to compress into a filename.brotli file\n"
+        " -brotli-quality <value>               : Set Brotli quality (Min: 0, Max: 11, Default: 11)\n"
+        " -brotli-windowsize <value>            : Set Brotli window size (Min: 10, Max: 24, Default: 24)\n"
+        " -brotli-decode-output-size <value>    : Set Brotli output buffer byte size\n"
 #endif
-    );
+        "\n"
+        " Miscellaneous: \n"
+        " -num-repeat <value>                   : Number of times to repeat the task (Default is 1)\n"
+        " -verbose                              : Print progress\n"
+        "\n"
+        " Formats supported for preconditioning:\n"
+        " Block compressed texture format BC1   : 1\n"
+        " Block compressed texture format BC2   : 2\n"
+        " Block compressed texture format BC3   : 3\n"
+        " Block compressed texture format BC4   : 4\n"
+        " Block compressed texture format BC5   : 5\n"
+        " Unknown format                        : 0\n"
+    , BROTLIG_DEFAULT_PAGE_SIZE, BROTLIG_MAX_PAGE_SIZE, BROTLIG_MIN_PAGE_SIZE);
 }
 
 void ParseCommandLine(int argCount, char* args[], std::string& srcFilePath, std::string& dstFilePath, BROTLIG_OPTIONS& params)
@@ -168,9 +228,45 @@ void ParseCommandLine(int argCount, char* args[], std::string& srcFilePath, std:
     // Options
     for (; i < argCount && args[i][0] == L'-'; ++i)
     {
-        if (strcmp(args[i], "-verbose") == 0)
+        if (strcmp(args[i], "-pagesize") == 0 && i + 1 < argCount)
         {
-            params.verbose = true;
+            params.page_size = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-precondition") == 0)
+        {
+            params.use_preconditioning = true;
+        }
+        else if (strcmp(args[i], "-swizzle") == 0)
+        {
+            params.use_swizzling = true;
+        }
+        else if (strcmp(args[i], "-delta-encode") == 0)
+        {
+            params.use_delta_encoding = true;
+        }
+        else if (strcmp(args[i], "-data-format") == 0)
+        {
+            params.data_format = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-texture-width") == 0)
+        {
+            params.tex_width = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-texture-height") == 0)
+        {
+            params.tex_height = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-row-pitch") == 0)
+        {
+            params.tex_pitch = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-num-mip-levels") == 0)
+        {
+            params.num_packed_miplevels = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-texture-pitch-d3d12-aligned") == 0)
+        {
+            params.is_pitch_d3d12_aligned = true;
         }
 #ifdef  USE_GPU_DECOMPRESSION
         else if (strcmp(args[i], "-gpu") == 0)
@@ -200,6 +296,14 @@ void ParseCommandLine(int argCount, char* args[], std::string& srcFilePath, std:
             params.brotli_decode_output_size = (uint32_t)std::stoi(args[++i]);
         }
 #endif
+        else if (strcmp(args[i], "-num-repeat") == 0)
+        {
+            params.num_repeat = (uint32_t)std::stoi(args[++i]);
+        }
+        else if (strcmp(args[i], "-verbose") == 0)
+        {
+            params.verbose = true;
+        }
         else
         {
             throw std::runtime_error("Unknown command line option.");
@@ -246,11 +350,17 @@ void printStatus(const char* status, ...)
 // Return true if processing needs to be aborted by the user
 // user can print out the processCompleted using printf or cout, 
 // doing so will slow down the encoding process
-bool processFeedback(float processCompleted)
+bool processFeedback(BROTLIG_MESSAGE_TYPE mtype, std::string msg)
 {
     if (keypressed())
         return true;
-    printStatus("\rProcessing %3.0f %%", processCompleted);
+    if (mtype == BROTLIG_MESSAGE_TYPE::BROTLIG_WARNING)
+        printf("%s\n", msg.c_str());
+    else
+    {
+        float v = std::stof(msg);
+        printStatus("\rProcessing %3.0f %%", v);
+    }
     return false;
 }
 
@@ -268,6 +378,8 @@ int main(int argc, char* argv[])
 
         BROTLIG_OPTIONS pParams;
         memset(&pParams, 0, sizeof(BROTLIG_OPTIONS));
+        pParams.page_size = BROTLIG_DEFAULT_PAGE_SIZE;
+        pParams.num_repeat = DEFAULT_NUM_REPEAT;
 
 #ifdef USE_BROTLI_CODEC
         pParams.brotli_quality = DEFAULT_BROTLI_QUALITY;
@@ -288,14 +400,14 @@ int main(int argc, char* argv[])
         bool     isCompressed = false;
         double   compression_ratio = 0.0;
         double   bandwidth = 0.0;
-        char* processMessage = "";
+        char*    processMessage = "";
 
 #ifdef USE_BROTLI_CODEC
         if (pParams.use_brotli == false)
 #endif // USE_BROTLI_CODEC
         {
             //--------------------------
-            // BrotliG  decompressor
+            // Brotli-G  decompressor
             //--------------------------
             if (EndsWith(srcFilePath.c_str(), BROTLIG_FILE_EXTENSION)) {
 
@@ -304,7 +416,6 @@ int main(int argc, char* argv[])
                     dstFilePath = srcFilePath;
                     RemoveExtension(dstFilePath, BROTLIG_FILE_EXTENSION);
                 }
-
 
                 if (!ReadBinaryFile(srcFilePath, src_data, &src_size))
                     throw std::exception("File Not Found.");
@@ -316,30 +427,47 @@ int main(int argc, char* argv[])
                 if (pParams.use_gpu)
                 {
                     //--------------------------
-                    // BrotliG  GPU decompressor
+                    // Brotli-G  GPU decompressor
                     //--------------------------
 
-                    processMessage = "Brotli-G GPU decompressor";
+                    processMessage = "BrotliG GPU decompressor";
 
-                    if (DecodeGPU(pParams.use_warp, src_size, src_data, &output_size, output_data, deltaTime) != BROTLIG_OK)
-                        throw std::exception("Brotli-G GPU Decoder Failed or Aborted.");
+                    uint32_t rep = 0;
+                    while (rep != pParams.num_repeat)
+                    {
+                        printf("Round %d of %d\n", rep + 1, pParams.num_repeat);
+                        double observedTime = 0.0;
+
+                        if (DecodeGPU(pParams.use_warp, src_size, src_data, &output_size, output_data, observedTime) != BROTLIG_OK)
+                            throw std::exception("BrotliG GPU Decoder Failed or Aborted.");
+
+                        deltaTime += observedTime;
+                        ++rep;
+                    }
                 }
                 else
 #endif
                 {
                     //--------------------------
-                    // BrotliG  CPU decompressor
+                    // Brotli-G  CPU decompressor
                     //--------------------------
 
-                    processMessage = "Brotli-G CPU decompressor";
+                    processMessage = "BrotliG CPU decompressor";
 
-                    auto start = std::chrono::high_resolution_clock::now();
-                    if (BrotliG::DecodeCPU(src_size, src_data, &output_size, output_data, pParams.verbose ? processFeedback : nullptr) != BROTLIG_OK)
-                        throw std::exception("Brotli-G CPU Decoder Failed or Aborted.");
-                    auto end = std::chrono::high_resolution_clock::now();
+                    uint32_t rep = 0;
+                    while (rep != pParams.num_repeat)
+                    {
+                        printf("Round %d of %d\n", rep + 1, pParams.num_repeat);
+                        auto start = std::chrono::high_resolution_clock::now();
 
-                    deltaTime = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
-                   
+                        if (BrotliG::DecodeCPU(src_size, src_data, &output_size, output_data, pParams.verbose ? processFeedback : nullptr) != BROTLIG_OK)
+                            throw std::exception("BrotliG CPU Decoder Failed or Aborted.");
+
+                        auto end = std::chrono::high_resolution_clock::now();
+
+                        deltaTime += static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+                        ++rep;
+                    }
                 }
                 
                 printf("Saving decompressed file %s\n", dstFilePath.c_str());
@@ -349,9 +477,15 @@ int main(int argc, char* argv[])
             else {
 
                 //-----------------------
-                // BrotliG CPU compressor
+                // Brotli-G CPU compressor
                 //-----------------------
-                processMessage = "Brotli-G CPU compressor";
+                if (pParams.page_size < BROTLIG_MIN_PAGE_SIZE)
+                    throw std::exception("Page Size is less than minimum allowed page size.");
+
+                if (pParams.page_size > BROTLIG_MAX_PAGE_SIZE)
+                    throw std::exception("Page Size exceeds maximum allowed page size.");
+
+                processMessage = "BrotliG CPU compressor";
 
                 dstFilePath = srcFilePath;
                 dstFilePath.append(BROTLIG_FILE_EXTENSION);
@@ -362,20 +496,38 @@ int main(int argc, char* argv[])
                 output_size = BrotliG::MaxCompressedSize(src_size);
                 output_data = new uint8_t[output_size];
 
-                auto start = std::chrono::high_resolution_clock::now();
-                if (BrotliG::Encode(src_size, src_data, &output_size, output_data, pParams.verbose ? processFeedback:nullptr) != BROTLIG_OK)
-                    throw std::exception("Brotli-G Encoder Failed or Aborted.");
-                auto end = std::chrono::high_resolution_clock::now();
+                BrotliG::BrotligDataconditionParams dcParams = { };
+                dcParams.precondition = pParams.use_preconditioning;
+                if (pParams.use_preconditioning)
+                {
+                    dcParams.swizzle            = pParams.use_swizzling;
+                    dcParams.delta_encode       = pParams.use_delta_encoding;
+                    dcParams.format             = static_cast<BROTLIG_DATA_FORMAT>(pParams.data_format);
+                    dcParams.widthInPixels      = pParams.tex_width;
+                    dcParams.heightInPixels     = pParams.tex_height;
+                    dcParams.numMipLevels       = pParams.num_packed_miplevels;
+                    dcParams.rowPitchInBytes    = pParams.tex_pitch;
+                    dcParams.pitchd3d12aligned  = pParams.is_pitch_d3d12_aligned;
+                }
 
-                deltaTime = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+                uint32_t rep = 0;
+                while (rep != pParams.num_repeat)
+                {
+                    printf("Round %d of %d\n", rep + 1, pParams.num_repeat);
+                    auto start = std::chrono::high_resolution_clock::now();
+                    if (BrotliG::Encode(src_size, src_data, &output_size, output_data, pParams.page_size, dcParams, pParams.verbose ? processFeedback : nullptr) != BROTLIG_OK)
+                        throw std::exception("BrotliG Encoder Failed or Aborted.");
+                    auto end = std::chrono::high_resolution_clock::now();
+
+                    deltaTime += static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+                    ++rep;
+                }
 
                 printf("\nSaving compressed file %s\n", dstFilePath.c_str());
                 if (!WriteBinaryFile(dstFilePath, output_data, output_size))
                     throw std::exception("File Not Saved.");
                 isCompressed = true;
-
             }
-
         }
 #ifdef USE_BROTLI_CODEC
         else {
@@ -399,21 +551,26 @@ int main(int argc, char* argv[])
 
                 // DeCompress the data
                 size_t output_sizet = (size_t)pParams.brotli_decode_output_size;
-                output_data = new uint8_t[output_size];
+                output_data = new uint8_t[output_sizet];
 
-                auto start = std::chrono::high_resolution_clock::now();
-                BrotliDecoderResult result = BrotliDecoderDecompress(src_size,src_data,&output_sizet,output_data);
-                auto end = std::chrono::high_resolution_clock::now();
+                uint32_t rep = 0;
+                while (rep != pParams.num_repeat)
+                {
+                    printf("Round %d of %d\n", rep + 1, pParams.num_repeat);
+                    auto start = std::chrono::high_resolution_clock::now();
+                    BrotliDecoderResult result = BrotliDecoderDecompress(src_size, src_data, &output_sizet, output_data);
+                    auto end = std::chrono::high_resolution_clock::now();
 
-                deltaTime = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
-                output_size = (uint32_t)output_sizet;
+                    if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT)
+                        throw std::exception("Brotli Decoder Failed. Set larger output buffer size.");
+                    else if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT
+                        || result == BROTLI_DECODER_RESULT_ERROR)
+                        throw std::exception("Brotil Decoder Failed. Input file may be corrupted.");
 
-
-                if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_OUTPUT)
-                    throw std::exception("Brotli Decoder Failed. Set larger output buffer size.");
-                else if (result == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT
-                    || result == BROTLI_DECODER_RESULT_ERROR)
-                    throw std::exception("Brotil Decoder Failed. Input file may be corrupted.");
+                    deltaTime += static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+                    output_size = (uint32_t)output_sizet;
+                    ++rep;
+                }
 
                 // Save the uncompressed file
                 printf("\nSaving decompressed file %s\n", dstFilePath.c_str());
@@ -437,21 +594,27 @@ int main(int argc, char* argv[])
                 size_t output_sizet = BrotliEncoderMaxCompressedSize(src_size);
                 uint8_t* output_data = new uint8_t[output_sizet];
 
-                auto start = std::chrono::high_resolution_clock::now();
-                if (!BrotliEncoderCompress( pParams.brotli_quality,
-                                            pParams.brotli_lgwin,
-                                            BROTLI_DEFAULT_MODE,
-                                            src_size,
-                                            src_data,
-                                            &output_sizet,
-                                            output_data)) 
+                uint32_t rep = 0;
+                while (rep != pParams.num_repeat)
                 {
-                    throw std::exception("Brotli Encoder Failed or Aborted.");
-                }
-                auto end = std::chrono::high_resolution_clock::now();
+                    printf("Round %d of %d\n", rep + 1, pParams.num_repeat);
+                    auto start = std::chrono::high_resolution_clock::now();
+                    if (!BrotliEncoderCompress(pParams.brotli_quality,
+                        pParams.brotli_lgwin,
+                        BROTLI_DEFAULT_MODE,
+                        src_size,
+                        src_data,
+                        &output_sizet,
+                        output_data))
+                    {
+                        throw std::exception("Brotli Encoder Failed or Aborted.");
+                    }
+                    auto end = std::chrono::high_resolution_clock::now();
 
-                deltaTime = static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
-                output_size = (uint32_t)output_sizet;
+                    deltaTime += static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
+                    output_size = (uint32_t)output_sizet;
+                    ++rep;
+                }
 
                 printf("\nSaving compressed file %s\n", dstFilePath.c_str());
                 if (!WriteBinaryFile(dstFilePath, output_data, output_size))
@@ -460,7 +623,7 @@ int main(int argc, char* argv[])
             }
         }
 #endif
-
+        deltaTime /= (double)pParams.num_repeat;
         if (deltaTime > 0.0)
             bandwidth = (static_cast<double>(src_size) / deltaTime) * (1000.0 / GIGABYTES);
         if ((output_size > 0) && isCompressed)
