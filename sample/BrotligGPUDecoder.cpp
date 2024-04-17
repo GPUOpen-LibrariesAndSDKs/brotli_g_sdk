@@ -512,6 +512,7 @@ BROTLIG_ERROR DecodeGPU(
     }
 
     // Create Buffers
+    size_t bufSize = (*output_size > input_size) ? *output_size : input_size;
     {
         size_t metadataSize = 4 * sizeof(uint32_t);
 
@@ -520,7 +521,7 @@ BROTLIG_ERROR DecodeGPU(
             device.Get(),
             D3D12_HEAP_TYPE_UPLOAD,
             D3D12_HEAP_FLAG_NONE,
-            BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE + metadataSize,
+            bufSize + metadataSize,
             D3D12_RESOURCE_FLAG_NONE,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             &uploadBuffer,
@@ -532,7 +533,7 @@ BROTLIG_ERROR DecodeGPU(
             device.Get(),
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_HEAP_FLAG_NONE,
-            BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
+            bufSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON,
             &inputBuffer,
@@ -556,7 +557,7 @@ BROTLIG_ERROR DecodeGPU(
             device.Get(),
             D3D12_HEAP_TYPE_DEFAULT,
             D3D12_HEAP_FLAG_NONE,
-            BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
+            bufSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_COMMON,
             &outputBuffer,
@@ -568,7 +569,7 @@ BROTLIG_ERROR DecodeGPU(
             device.Get(),
             D3D12_HEAP_TYPE_READBACK,
             D3D12_HEAP_FLAG_NONE,
-            BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
+            bufSize,
             D3D12_RESOURCE_FLAG_NONE,
             D3D12_RESOURCE_STATE_COPY_DEST,
             &readbackBuffer,
@@ -607,7 +608,7 @@ BROTLIG_ERROR DecodeGPU(
 
     // Prepare and upload the metadata
     {
-        uint32_t* pMetadata = reinterpret_cast<uint32_t*>(uploadPtr + BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE);
+        uint32_t* pMetadata = reinterpret_cast<uint32_t*>(uploadPtr + bufSize);
         *pMetadata++ = 1;
         *pMetadata++ = 0;
         *pMetadata++ = 0;
@@ -616,7 +617,7 @@ BROTLIG_ERROR DecodeGPU(
         BarrierCopy(
             commandList.Get(),
             uploadBuffer.Get(),
-            BROTLIG_GPUD_DEFAULT_MAX_TEMP_BUFFER_SIZE,
+            bufSize,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             D3D12_RESOURCE_STATE_GENERIC_READ,
             D3D12_RESOURCE_STATE_GENERIC_READ,
